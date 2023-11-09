@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: logging # Change namespace according to cluster setup
+  labels:
+    app: grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+      - name: grafana
+        image: grafana/grafana:latest
+        imagePullPolicy: Always
+        resources:
+          limits:
+            cpu: 500m    # CPU limit
+            memory: 500Mi # memory limit
+          requests:
+            cpu: 100m    # CPU request
+            memory: 100Mi # memory request
+        ports:
+        - containerPort: 3000
+        env:
+        - name: Username
+          value: "admin"
+        - name: Password
+          value: "admin"
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: logging # Change namespace according to cluster setup
+  labels:
+    app: grafana-service
+spec:
+  selector:
+    app: grafana
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 3000
+    nodePort: 32000 # NodePort value range can be 30000-32767 
+  type: NodePort

@@ -1,0 +1,174 @@
+apiVersion: v1
+kind: ConfigMap # Define configmap for fluentbit pod/conatiner
+metadata:
+  name: fluent-bit-configmap # Define name of fluentbit configmap
+  namespace: logging # Change namespace according to cluster setup
+data:
+  parsers.conf: |
+    [PARSER]
+        Name   apache
+        Format regex
+        Regex  ^(?<host>[^ ]*) [^ ]* (?<user>[^ ]*) \[(?<time>[^\]]*)\] "(?<method>\S+)(?: +(?<path>[^\"]*?)(?: +\S*)?)?" (?<code>[^ ]*) (?<size>[^ ]*)(?: "(?<referer>[^\"]*)" "(?<agent>[^\"]*)")?$
+        Time_Key time
+        Time_Format %d/%b/%Y:%H:%M:%S %z
+
+    [PARSER]
+        Name   apache2
+        Format regex
+        Regex  ^(?<host>[^ ]*) [^ ]* (?<user>[^ ]*) \[(?<time>[^\]]*)\] "(?<method>\S+)(?: +(?<path>[^ ]*) +\S*)?" (?<code>[^ ]*) (?<size>[^ ]*)(?: "(?<referer>[^\"]*)" "(?<agent>[^\"]*)")?$
+        Time_Key time
+        Time_Format %d/%b/%Y:%H:%M:%S %z
+
+    [PARSER]
+        Name   apache_error
+        Format regex
+        Regex  ^\[[^ ]* (?<time>[^\]]*)\] \[(?<level>[^\]]*)\](?: \[pid (?<pid>[^\]]*)\])?( \[client (?<client>[^\]]*)\])? (?<message>.*)$
+
+    [PARSER]
+        Name   nginx
+        Format regex
+        Regex ^(?<remote>[^ ]*) (?<host>[^ ]*) (?<user>[^ ]*) \[(?<time>[^\]]*)\] "(?<method>\S+)(?: +(?<path>[^\"]*?)(?: +\S*)?)?" (?<code>[^ ]*) (?<size>[^ ]*)(?: "(?<referer>[^\"]*)" "(?<agent>[^\"]*)")?$
+        Time_Key time
+        Time_Format %d/%b/%Y:%H:%M:%S %z
+
+    [PARSER]
+        Name   json
+        Format json
+        Time_Key time
+        Time_Format %d/%b/%Y:%H:%M:%S %z
+
+    [PARSER]
+        Name        docker
+        Format      json
+        Time_Key    time
+        Time_Format %Y-%m-%dT%H:%M:%S.%L
+        Time_Keep   On
+
+    [PARSER]
+        # http://rubular.com/r/tjUt3Awgg4
+        Name cri
+        Format regex
+        Regex ^(?<time>[^ ]+) (?<stream>stdout|stderr) (?<logtag>[^ ]*) (?<message>.*)$
+        Time_Key    time
+        Time_Format %Y-%m-%dT%H:%M:%S.%L%z
+
+    [PARSER]
+        Name        syslog
+        Format      regex
+        Regex       ^\<(?<pri>[0-9]+)\>(?<time>[^ ]* {1,2}[^ ]* [^ ]*) (?<host>[^ ]*) (?<ident>[a-zA-Z0-9_\/\.\-]*)(?:\[(?<pid>[0-9]+)\])?(?:[^\:]*\:)? *(?<message>.*)$
+        Time_Key    time
+        Time_Format %b %d %H:%M:%S
+
+  fluent-bit.conf: | # This configuration focuses on tailing log files from specific paths and forwarding them to Loki(log aggregation system)
+    [SERVICE]
+      Flush 1
+      Log_Level debug
+      Daemon  off
+      Parsers_File  parsers.conf
+
+    # Input to monitor logs of all pods in the cluster
+    [INPUT]
+      Name tail
+      Path /var/log/containers/*.log
+      Parser docker
+      Tag all-pods-logs
+      Exclude_path /var/log/containers/fluent-bit*.log , /var/log/containers/loki*.log, /var/log/containers/grafana*.log
+      read_from_head true
+
+    # [FILTER]
+    #     Name                kubernetes
+    #     Match               all-pods-logs
+    #     Kube_URL            https://kubernetes.default.svc:443
+    #     Kube_CA_File        /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+    #     Kube_Token_File     /var/run/secrets/kubernetes.io/serviceaccount/token
+    #     Kube_Tag_Prefix     kube.var.log.containers.
+    #     Merge_Log           On
+    #     Merge_Log_Key       log_processed
+    #     K8S-Logging.Parser  On
+    #     K8S-Logging.Exclude Off
+
+    # [INPUT]
+    #   name      dummy
+    #   dummy     {"key": 1, "sub": {"stream": "stdout", "id": "some id"}, "kubernetes": {"labels": {"team": "Santiago Wanderers"}}}
+    #   samples   1
+    #   Tag       test
+
+    # [OUTPUT]
+    #   name                   ${Output-Name}
+    #   match                  test
+    #   host                   ${Output-Host}
+    #   port                   ${Output-Port}
+    #   labels                 job=fluentbit-test
+    #   auto_kubernetes_labels on
+
+    # Outputs are configured to send logs to a Loki service at "loki-service" on port 3100
+    [OUTPUT]
+      Name ${Output-Name}
+      Match all-pods-logs
+      Host ${Output-Host}
+      Port ${Output-Port}
+      Tenant_ID my-tenant-id
+      Labels log_app=all-pods-logs
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fluent-bit
+  namespace: logging # Change namespace according to cluster setup
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fluent-bit
+  template:
+    metadata:
+      labels:
+        app: fluent-bit
+    spec:
+      volumes:
+      # Refers to the ConfigMap named "fluent-bit-configmap"
+      - name: fluentbit-configmap
+        configMap:
+          name: fluent-bit-configmap
+
+      - name: containers-logs
+        hostPath:
+          path: /var/lib/docker/containers
+          # type: DirectoryOrCreate
+      - name: varlog
+        hostPath:
+          path: /var/log
+
+      # The Fluentbit container is named "fluent-bit" and uses the "fluent/fluent-bit" image
+      containers:
+      - name: fluent-bit
+        image: fluent/fluent-bit
+        imagePullPolicy: Always
+        env:
+          - name: Output-Name
+            value: Loki
+          - name: Output-Host
+            value: loki-service
+          - name: Output-Port
+            value: "3100"
+        resources:
+          limits:
+            cpu: 500m    # CPU limit
+            memory: 500Mi # memory limit
+          requests:
+            cpu: 100m    # CPU request
+            memory: 100Mi # memory request
+
+        # The volume mounts are configured to mount the appropriate paths from ConfigMap into the container
+        volumeMounts:          
+        - name: containers-logs
+          mountPath: /var/lib/docker/containers
+          readOnly: true
+        - name: varlog
+          mountPath: /var/log
+          readOnly: true
+        - name: fluentbit-configmap
+          mountPath: /fluent-bit/etc
+          readOnly: true

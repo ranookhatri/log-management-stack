@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loki
+  namespace: logging # Change namespace according to cluster setup
+  labels:
+    app: loki
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: loki
+  template:
+    metadata:
+      labels:
+        app: loki
+    spec:
+      containers:
+      - name: loki
+        image: grafana/loki:latest
+        imagePullPolicy: Always
+        resources:
+          limits:
+            cpu: 500m    # CPU limit
+            memory: 500Mi # memory limit
+          requests:
+            cpu: 100m    # CPU request
+            memory: 100Mi # memory request
+        ports:
+        - name: http
+          containerPort: 3100
+        volumeMounts:
+        - name: loki-data
+          mountPath: /data
+      volumes:
+      - name: loki-data
+        emptyDir: {} # emptyDir volume is a temporary storage volume created when the pod is created and deleted when the pod is terminated. This volume is used for transient data and is useful for storing temporary files or caching data.
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki-service
+  namespace: logging # Change namespace according to cluster setup
+  labels:
+    app: loki
+spec:
+  selector:
+    app: loki
+  ports:
+    - name: http
+      port: 3100
+      targetPort: 3100
