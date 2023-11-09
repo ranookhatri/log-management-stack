@@ -45,7 +45,6 @@ data:
         Time_Keep   On
 
     [PARSER]
-        # http://rubular.com/r/tjUt3Awgg4
         Name cri
         Format regex
         Regex ^(?<time>[^ ]+) (?<stream>stdout|stderr) (?<logtag>[^ ]*) (?<message>.*)$
